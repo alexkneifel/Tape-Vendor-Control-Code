@@ -21,6 +21,14 @@
 #include <AccelStepper.h>
 #include <AccelStepperWithDistance.h>
 
+// I2C slave bytes
+const uint8_t SERVO_DONE  = 1 << 0;  // 0b00000001
+
+// I2C master bytes
+const uint8_t MOVE_SERVO = 1 << 0; 
+const int SLAVE_ADDR = 0x08;
+bool servo_moving = false;
+
 //limit switches
 //green/brown
 const int Z_TOP_LIMIT = A0;
@@ -99,6 +107,7 @@ void disableMotorsZ();
 void enableMotorsX();
 void disableMotorsX();
 void moveTo(Position posToGoTo);
+void pingServo();
 
 
 // // TODO figure out home position
@@ -112,11 +121,8 @@ Serial.println("Serial started");
 // setting up serial comm with the raspberrX pi
 //Serial1.begin(9600);
 
-//setting up i2c communication
-// Wire.begin(0);
-// Wire.onReceive(receiveData);
-// slave will have address 0
-
+//setting up i2c communication with other arduino, this one is the master
+Wire.begin();
 
 // limit switches for the stepper motors
 pinMode(Z_TOP_LIMIT, INPUT_PULLUP);
@@ -248,8 +254,25 @@ void loop()
 // got rid of btmLimHit condition for sake of the entrance
   if(!topLimHit && !topLimLatched && !btmLimLatched && !leftLimHit && !leftLimLatched && !rightLimHit && !rightLimLatched)
   {
+    // if the servo was pinged read from the servo
+    if(servo_moving)
+    {
+      Wire.requestFrom(SLAVE_ADDR, 1); // ask for 1 byte
+      if (Wire.available()) 
+      {
+        uint8_t status = Wire.read();
+        if (status == SERVO_DONE) 
+        {
+          Serial.println("Servo done moving!");
+          servo_moving = false;
+        } else 
+        {
+          Serial.println("Servo still moving...");
+        }
+      }
+    }
 
-    if(Serial.available() > 0)
+    else if(Serial.available() > 0)
     {
       String incomingMsg = Serial.readStringUntil('\n');
       incomingMsg.trim();
@@ -261,6 +284,11 @@ void loop()
         homeMotorsX();
       }
 
+      else if (incomingMsg == "s")
+      {
+        pingServo();
+      }
+      
       else if (incomingMsg == "c")
       {
         Serial.println("Motor enabled");
@@ -315,6 +343,15 @@ void moveTo(Position posToGoTo)
   Serial.println("Motors killed");
   disableMotorsZ();
   disableMotorsX();
+}
+
+void pingServo()
+{
+  Wire.beginTransmission(SLAVE_ADDR);
+  // ping it to move the servo
+  Wire.write(MOVE_SERVO);  // same as MOVE_SERVO
+  Wire.endTransmission();
+  servo_moving = true;
 }
 
 void homeMotorsZ()
@@ -476,5 +513,6 @@ Position posTranslation(int xIdx, int zIdx)
   shelf.zPos = Z_OFFSET + zIdx * Z_SHELF_DIST;
   return shelf;
 }
+
 
 

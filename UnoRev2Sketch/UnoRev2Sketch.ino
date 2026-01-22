@@ -1,8 +1,8 @@
 /**
 *
 * This file contains control code for Arduino Rev 2.
-* It is the master in I2C to Uno Rev3, it controls all the motors (via 
-* a DC motor shield) : the DC motors, the servo motor via low switching.
+* It is the slave in I2C to Uno Rev3, it controls all the DC motors (via 
+* a DC motor shield) abnd the servo motor via low switching.
 * It also monitors if a casette has been entered into the machine via two infrared sensors.
 *
 **/
@@ -10,6 +10,14 @@
 #include <Wire.h>
 #include <AFMotor.h>
 #include <Servo.h>
+#include <stdint.h>
+
+// I2C slave bytes
+const uint8_t SERVO_DONE  = 1 << 0;  // 0b00000001
+
+// I2C master bytes
+const uint8_t MOVE_SERVO = 1 << 0; 
+
 
 // Create motor shield object
 AF_DCMotor motor1(1);
@@ -25,8 +33,13 @@ const int IR_SENSOR_FRONT = A2;
 const int IR_SENSOR_BACK = A3;
 
 // I2C Address of Slave Arduino
-// TODO i dont think this is my slave address
-const int SLAVE_ADDRESS = 0x08;
+const int SLAVE_ADDR = 0x08;
+// bit that flips everytime master commands this arduino to track extension direction
+bool servo_extended = false;
+uint8_t servo_status = 0;
+unsigned long servoStartTime = 0;
+// how long exactly does it take for the servo to move ?
+const unsigned long SERVO_MOVE_TIME = 1000; // ms
 
 enum State 
 {
@@ -41,10 +54,27 @@ State currentState = IDLE;
 bool frontside = false;
 bool backside = false;
 
+// it should only need to send back
+// servos are done moving (whether it's pickup or dropoff, it doesnt matter, master arduino will keep track off)
+
+// it needs to receive
+// at position for servo extension (whether it's pickup or dropoff it's the same thing, master arduino will keep track of this)
+void receiveData(int bytes);
+void sendData ();
+void startRampUpMotors(); 
+void rampDownMotors();
+void startRampUpOuttakeMotors();
+void rampDownOuttakeMotors();
+void stopMotors();
+void moveServo();
+
 void setup() 
 {
     Serial.begin(9600);
-    Wire.begin();
+
+    Wire.begin(SLAVE_ADDR);
+    Wire.onReceive(receiveData);
+    Wire.onRequest(sendData);
 
     motor1.setSpeed(0);
     motor4.setSpeed(0);
@@ -60,6 +90,9 @@ void setup()
     pinMode(IR_SENSOR_FRONT, INPUT_PULLUP);
     pinMode(IR_SENSOR_BACK, INPUT_PULLUP);
 
+    pinMode(A0, OUTPUT);
+    digitalWrite(A0, LOW);
+
 }
 
 void loop() 
@@ -70,12 +103,17 @@ void loop()
   Serial.println(frontside);
   Serial.println(backside);
 
-
-
     // motor1.setSpeed(255);
     // motor4.setSpeed(255);
     // motor1.run(BACKWARD);
     // motor4.run(FORWARD);
+
+ // since .write() is non-blocking, need to flip the bit after a set time that the servo is moving
+ // because servos dont output their actual position
+  if (servo_status == 0 && millis() - servoStartTime >= SERVO_MOVE_TIME) 
+  {
+    servo_status = SERVO_DONE;
+  }
 
   switch (currentState)
   {
@@ -191,4 +229,45 @@ void stopMotors()
     motor4.run(RELEASE);
     motor1.setSpeed(0);
     motor4.setSpeed(0);
+}
+
+void receiveData(int bytes) 
+{
+  uint8_t command = Wire.read();  // read one character from the I2C
+  // i need to check if the command is the number 1, and if it is, then move the servo
+  // need to set servo_extended to its not
+  // should call the function to extend the servo
+  Serial.println( " I2C Command Received");
+
+  // toggle pin HIGH briefly
+  digitalWrite(A0, HIGH);
+  delay(500);    // short pulse
+  digitalWrite(A0, LOW);
+  if(command == MOVE_SERVO)
+  {
+    moveServo();
+  }
+}
+
+void moveServo()
+{
+  // 0 means it is in motion
+  servo_status = 0;
+  if(servo_extended)
+  {
+    // retract servo
+    cassetteServo.write(0);
+    servo_extended = false;
+  }
+  else
+  {
+    // extend servo
+    cassetteServo.write(160);
+    servo_extended = true;
+  }
+}
+
+void sendData()
+{
+  Wire.write(servo_status);
 }
