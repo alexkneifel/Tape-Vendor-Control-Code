@@ -14,6 +14,7 @@
 
 // I2C slave bytes
 const uint8_t SERVO_DONE  = 1 << 0;  // 0b00000001
+const uint8_t SERVO_MOVING = 0;
 
 // I2C master bytes
 const uint8_t MOVE_SERVO = 1 << 0; 
@@ -24,9 +25,11 @@ AF_DCMotor motor1(1);
 AF_DCMotor motor4(4);
 
 // Servo object
-Servo cassetteServo;
-const int SERVO_PIN = 9; // Servo 1
+Servo servo2;
 const int SERVO_ENABLE = A0; // Enable pin
+const int SERVO_SIG = 9;
+
+const int I2C_INDICATOR = A1;
 
 // Infrared Sensors
 const int IR_SENSOR_FRONT = A2;
@@ -36,10 +39,12 @@ const int IR_SENSOR_BACK = A3;
 const int SLAVE_ADDR = 0x08;
 // bit that flips everytime master commands this arduino to track extension direction
 bool servo_extended = false;
-uint8_t servo_status = 0;
-unsigned long servoStartTime = 0;
+uint8_t servo_status = SERVO_DONE; // 0 means the servo is moving
+unsigned long servo_start_time = 0;
 // how long exactly does it take for the servo to move ?
 const unsigned long SERVO_MOVE_TIME = 1000; // ms
+volatile bool move_servo_requested = false;
+volatile bool servo_ack_pending = false;
 
 enum State 
 {
@@ -82,16 +87,16 @@ void setup()
     motor4.run(RELEASE);
 
     // Attach servo
-    cassetteServo.attach(SERVO_PIN);
+    servo2.attach(SERVO_SIG);
     pinMode(SERVO_ENABLE, OUTPUT);
     digitalWrite(SERVO_ENABLE, LOW); // Disable servo initially
+
+    pinMode(I2C_INDICATOR, OUTPUT);
+    digitalWrite(I2C_INDICATOR, LOW);
 
     // Sensor setup
     pinMode(IR_SENSOR_FRONT, INPUT_PULLUP);
     pinMode(IR_SENSOR_BACK, INPUT_PULLUP);
-
-    pinMode(A0, OUTPUT);
-    digitalWrite(A0, LOW);
 
 }
 
@@ -110,9 +115,21 @@ void loop()
 
  // since .write() is non-blocking, need to flip the bit after a set time that the servo is moving
  // because servos dont output their actual position
-  if (servo_status == 0 && millis() - servoStartTime >= SERVO_MOVE_TIME) 
+   if(move_servo_requested)
   {
-    servo_status = SERVO_DONE;
+    moveServo();
+    move_servo_requested = false;
+  }
+
+// servo_status == 0 means it is in motion
+// this is checking that 1 second has elapsed since it first moved
+  if ( servo_ack_pending /*&& servo_status == SERVO_MOVING*/ && millis() - servo_start_time >= SERVO_MOVE_TIME) 
+  {
+    // sometimes this responds done way quicker than it actually is
+    //servo_status = SERVO_DONE;
+    servo_ack_pending = false;
+    digitalWrite(SERVO_ENABLE, LOW);
+    digitalWrite(I2C_INDICATOR, LOW);
   }
 
   switch (currentState)
@@ -234,40 +251,43 @@ void stopMotors()
 void receiveData(int bytes) 
 {
   uint8_t command = Wire.read();  // read one character from the I2C
-  // i need to check if the command is the number 1, and if it is, then move the servo
-  // need to set servo_extended to its not
-  // should call the function to extend the servo
-  Serial.println( " I2C Command Received");
 
-  // toggle pin HIGH briefly
-  digitalWrite(A0, HIGH);
-  delay(500);    // short pulse
-  digitalWrite(A0, LOW);
   if(command == MOVE_SERVO)
   {
-    moveServo();
+    move_servo_requested = true;
+    servo_ack_pending = true;
   }
 }
 
 void moveServo()
 {
   // 0 means it is in motion
-  servo_status = 0;
+  //servo_status = SERVO_MOVING;
+
+  digitalWrite(I2C_INDICATOR, HIGH);
+
   if(servo_extended)
   {
     // retract servo
-    cassetteServo.write(0);
+    digitalWrite(SERVO_ENABLE, HIGH);
+    servo2.write(0);
     servo_extended = false;
   }
   else
   {
     // extend servo
-    cassetteServo.write(160);
+    digitalWrite(SERVO_ENABLE, HIGH);
+    // was 155
+    servo2.write(158);
     servo_extended = true;
   }
+  servo_start_time = millis();
 }
 
 void sendData()
 {
-  Wire.write(servo_status);
+  //Wire.write(servo_status);
+  // 0 should be that it's moving and 1 not
+  // and servo_ack_pending is the not of this so
+  Wire.write(!servo_ack_pending);
 }

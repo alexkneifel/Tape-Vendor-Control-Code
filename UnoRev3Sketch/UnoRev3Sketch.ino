@@ -68,11 +68,14 @@ const double ENTR_Z_DIST = 0;
 const double ENTR_X_DIST = 211;
 // distance from limit switch to the first shelf
 // this could maybe be less
-const double X_OFFSET = 3;
-const double Z_OFFSET = 0;
+double X_OFFSET = 1.5;
+const double Z_OFFSET = -3;
 // number of shelves
 const int TOP_SHELF_IDX = 11;
 const int RIGHT_SHELF_IDX = 4;
+
+// amount to pick up and drop off a cassette
+const double PICKUP_DIST = 10;
 
 // from the above, homing sequence seems to put as at the right spot to pick up the casette
 // spacing for the shelves seems to be good though, no Z offset necessary
@@ -108,6 +111,7 @@ void enableMotorsX();
 void disableMotorsX();
 void moveTo(Position posToGoTo);
 void pingServo();
+void waitForServo();
 
 
 // // TODO figure out home position
@@ -254,28 +258,14 @@ void loop()
 // got rid of btmLimHit condition for sake of the entrance
   if(!topLimHit && !topLimLatched && !btmLimLatched && !leftLimHit && !leftLimLatched && !rightLimHit && !rightLimLatched)
   {
-    // if the servo was pinged read from the servo
-    if(servo_moving)
-    {
-      Wire.requestFrom(SLAVE_ADDR, 1); // ask for 1 byte
-      if (Wire.available()) 
-      {
-        uint8_t status = Wire.read();
-        if (status == SERVO_DONE) 
-        {
-          Serial.println("Servo done moving!");
-          servo_moving = false;
-        } else 
-        {
-          Serial.println("Servo still moving...");
-        }
-      }
-    }
 
-    else if(Serial.available() > 0)
+    if(Serial.available() > 0)
     {
       String incomingMsg = Serial.readStringUntil('\n');
       incomingMsg.trim();
+      // TEMPORARY parsing of the serial message in the format xIndex, zIndex
+      int firstComma  = incomingMsg.indexOf(',');
+      int secondComma = incomingMsg.indexOf(',', firstComma + 1);
 
       if (incomingMsg == "h" && !btmLimHit)
       {
@@ -286,6 +276,7 @@ void loop()
 
       else if (incomingMsg == "s")
       {
+        Serial.println("Servo pinged");
         pingServo();
       }
       
@@ -295,31 +286,64 @@ void loop()
         moveTo(entrancePos);
       }
 
-      // TEMPORARY parsing of the serial message in the format xIndex, zIndex
-      int commaIndex = incomingMsg.indexOf(',');
-
-      if(commaIndex == -1) 
+      // if there's no commas, it's a 1.4 to change the offset
+      else if(firstComma == -1 ) 
       {
-        Serial.println("Invalid command format");
+        X_OFFSET = incomingMsg.toFloat();
+        Serial.print("X_OFFSET change to ");
+        Serial.println(X_OFFSET);
         return;
       }
 
-      int xIndex = incomingMsg.substring(0, commaIndex).toInt();
-      int zIndex = incomingMsg.substring(commaIndex + 1).toInt();
+      // this is just if you put in a locaiton 2,3
+      else if(secondComma == -1)
+    {
+      int xIndex = incomingMsg.substring(0, firstComma).toInt();
+      int zIndex = incomingMsg.substring(firstComma + 1).toInt();
 
-      // Optional sanity checks
+      // positional indices must be within
       if(xIndex < 0 || xIndex > RIGHT_SHELF_IDX || zIndex <= 0 || zIndex > TOP_SHELF_IDX) 
       {
         Serial.println("Invalid indices");
         return;
       }
+      Serial.println(" Move to location");
+      Position shelf_pos = posTranslation(xIndex, zIndex);
+      moveTo(shelf_pos);
+    }
       else 
       {
-        moveTo(posTranslation(xIndex, zIndex));
-      }
+        Serial.println("pickup from location");
+        String pickup = incomingMsg.substring(0,firstComma);
+        int xIndex = incomingMsg.substring(firstComma + 1, secondComma).toInt();
+        int zIndex = incomingMsg.substring(secondComma + 1).toInt();
+        Position shelf_pos = posTranslation(xIndex, zIndex);
+        Position above_shelf = {shelf_pos.xPos, shelf_pos.zPos + PICKUP_DIST};
+        // p for pickup
+        if(pickup == "p")
+        {
+          moveTo(shelf_pos);
+          pingServo();
+          waitForServo();
+          moveTo(above_shelf);
+          pingServo();
+          waitForServo();
+        }
+        // do for drop off
+        else if(pickup == "d")
+        {
+          moveTo(above_shelf);
+          pingServo();
+          waitForServo();
+          moveTo(posTranslation(xIndex, zIndex));
+          pingServo();
+          waitForServo();
+        }
 
+      }
     }
 
+    
   }
 }
 
@@ -349,9 +373,30 @@ void pingServo()
 {
   Wire.beginTransmission(SLAVE_ADDR);
   // ping it to move the servo
+  Serial.println("Servo sent");
+  Serial.println(MOVE_SERVO);
   Wire.write(MOVE_SERVO);  // same as MOVE_SERVO
   Wire.endTransmission();
   servo_moving = true;
+}
+
+void waitForServo()
+{
+  while (true)
+  {
+    Serial.println(" Waiting for servo");
+    Wire.requestFrom(SLAVE_ADDR, 1);
+    if (Wire.available())
+    {
+      if (Wire.read() == SERVO_DONE)
+      {
+        Serial.println("Servo responded done");
+        servo_moving = false;
+        break;
+      }
+    }
+    delay(100);
+  }
 }
 
 void homeMotorsZ()
@@ -513,6 +558,8 @@ Position posTranslation(int xIdx, int zIdx)
   shelf.zPos = Z_OFFSET + zIdx * Z_SHELF_DIST;
   return shelf;
 }
+
+
 
 
 
