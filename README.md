@@ -1,0 +1,1 @@
+Arduino firmware for my automated cassette tape storage system. It involves two Arduino Uno's communicating with each other, with a RPi, controlling motors, reading limit switches, and reading IR sensors.
