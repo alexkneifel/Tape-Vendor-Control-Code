@@ -105,8 +105,8 @@ void loop()
   frontside = digitalRead(IR_SENSOR_FRONT);
   backside = digitalRead(IR_SENSOR_BACK);
 
-  Serial.println(frontside);
-  Serial.println(backside);
+  //Serial.println(frontside);
+  //Serial.println(backside);
 
     // motor1.setSpeed(255);
     // motor4.setSpeed(255);
@@ -117,6 +117,7 @@ void loop()
  // because servos dont output their actual position
    if(move_servo_requested)
   {
+    Serial.println(" Move Servo ");
     moveServo();
     move_servo_requested = false;
   }

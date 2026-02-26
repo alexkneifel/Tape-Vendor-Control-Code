@@ -29,6 +29,24 @@ const uint8_t MOVE_SERVO = 1 << 0;
 const int SLAVE_ADDR = 0x08;
 bool servo_moving = false;
 
+//User interface command library
+const uint8_t HOME = 0x01;
+const uint8_t PICKUP = 0x02;
+const uint8_t DROPOFF = 0x03;
+const uint8_t GOTO = 0x04;
+const uint8_t SERVO = 0x05;
+const uint8_t OFFSET = 0x06;
+const uint8_t CANCEL = 0x07;
+const uint8_t REMOVE = 0x08;
+const uint8_t ENTRANCE = 0x09;
+const uint8_t DISPENSE = 0x0A;
+const uint8_t RETURN = 0x0B;
+const uint8_t SWITCH = 0x0C;
+
+//Internal Comms
+const uint8_t CASS_ACTION_DONE = 0x0D;
+const uint8_t ARDUINO_DONE = 0x4B;
+
 //limit switches
 //green/brown
 const int Z_TOP_LIMIT = A0;
@@ -72,7 +90,7 @@ double X_OFFSET = 1.5;
 const double Z_OFFSET = -3;
 // number of shelves
 const int TOP_SHELF_IDX = 11;
-const int RIGHT_SHELF_IDX = 4;
+const int RIGHT_SHELF_IDX = 5;
 
 // amount to pick up and drop off a cassette
 const double PICKUP_DIST = 10;
@@ -133,6 +151,7 @@ pinMode(Z_TOP_LIMIT, INPUT_PULLUP);
 pinMode(Z_BTM_LIMIT, INPUT_PULLUP);
 pinMode(X_LEFT_LIMIT, INPUT_PULLUP);
 pinMode(X_RIGHT_LIMIT, INPUT_PULLUP);
+
 
 enableInterrupt(Z_TOP_LIMIT, killMotors, FALLING);
 enableInterrupt(Z_BTM_LIMIT, killMotors, FALLING);
@@ -259,91 +278,185 @@ void loop()
   if(!topLimHit && !topLimLatched && !btmLimLatched && !leftLimHit && !leftLimLatched && !rightLimHit && !rightLimLatched)
   {
 
-    if(Serial.available() > 0)
+// serial that comes in is always
+// serial command: HOME, SERVO, CANCEL, ENTRANCE,
+// serial command followed by a number (need to divide by 10): offset
+// serial commands followed by positions: PICKUP, DROPOFF, GOTO, RETURN, REMOVE, DISPENSE
+// serial commands followed by two positions: SWITCH
+
+// arduino to arduino done, CASS_ACTION_DONE
+// arduino to rpi done ARDUINO_DONE
+
+    if (Serial.available() >= 1)
     {
-      String incomingMsg = Serial.readStringUntil('\n');
-      incomingMsg.trim();
-      // TEMPORARY parsing of the serial message in the format xIndex, zIndex
-      int firstComma  = incomingMsg.indexOf(',');
-      int secondComma = incomingMsg.indexOf(',', firstComma + 1);
+        uint8_t cmd = Serial.peek();   // look but don't remove yet
 
-      if (incomingMsg == "h" && !btmLimHit)
-      {
-        Serial.println("Motor enabled");
-        homeMotorsZ();
-        homeMotorsX();
-      }
+        int requiredBytes = 1;
 
-      else if (incomingMsg == "s")
-      {
-        Serial.println("Servo pinged");
-        pingServo();
-      }
-      
-      else if (incomingMsg == "c")
-      {
-        Serial.println("Motor enabled");
-        moveTo(entrancePos);
-      }
+        // Determine packet size
+        if (cmd == OFFSET)
+            requiredBytes = 2;
+        else if (cmd == SWITCH)
+            requiredBytes = 5;
+        else if (cmd == PICKUP || cmd == DROPOFF || cmd == GOTO || cmd == RETURN || cmd == REMOVE || cmd == DISPENSE)
+            requiredBytes = 3;
+        else
+            requiredBytes = 1;
 
-      // if there's no commas, it's a 1.4 to change the offset
-      else if(firstComma == -1 ) 
-      {
-        X_OFFSET = incomingMsg.toFloat();
-        Serial.print("X_OFFSET change to ");
-        Serial.println(X_OFFSET);
-        return;
-      }
-
-      // this is just if you put in a locaiton 2,3
-      else if(secondComma == -1)
-    {
-      int xIndex = incomingMsg.substring(0, firstComma).toInt();
-      int zIndex = incomingMsg.substring(firstComma + 1).toInt();
-
-      // positional indices must be within
-      if(xIndex < 0 || xIndex > RIGHT_SHELF_IDX || zIndex <= 0 || zIndex > TOP_SHELF_IDX) 
-      {
-        Serial.println("Invalid indices");
-        return;
-      }
-      Serial.println(" Move to location");
-      Position shelf_pos = posTranslation(xIndex, zIndex);
-      moveTo(shelf_pos);
-    }
-      else 
-      {
-        Serial.println("pickup from location");
-        String pickup = incomingMsg.substring(0,firstComma);
-        int xIndex = incomingMsg.substring(firstComma + 1, secondComma).toInt();
-        int zIndex = incomingMsg.substring(secondComma + 1).toInt();
-        Position shelf_pos = posTranslation(xIndex, zIndex);
-        Position above_shelf = {shelf_pos.xPos, shelf_pos.zPos + PICKUP_DIST};
-        // p for pickup
-        if(pickup == "p")
+        // Wait until full packet is available
+        if (Serial.available() >= requiredBytes)
         {
-          moveTo(shelf_pos);
-          pingServo();
-          waitForServo();
-          moveTo(above_shelf);
-          pingServo();
-          waitForServo();
-        }
-        // do for drop off
-        else if(pickup == "d")
-        {
-          moveTo(above_shelf);
-          pingServo();
-          waitForServo();
-          moveTo(posTranslation(xIndex, zIndex));
-          pingServo();
-          waitForServo();
-        }
+            cmd = Serial.read();   // now actually remove it
 
-      }
+            int x = -1;
+            int z = -1;
+            int x1 = -1;
+            int z1 = -1;
+            int x2 = -1;
+            int z2 = -1;
+            int x_offset = -1;
+
+            // ---------------- Read Payload ----------------
+
+            if (cmd == OFFSET)
+            {
+                x_offset = Serial.read();
+            }
+
+            else if (requiredBytes == 3)
+            {
+                x = Serial.read();
+                z = Serial.read();
+            }
+
+            else if (cmd == SWITCH)
+            {
+                x1 = Serial.read();
+                z1 = Serial.read();
+                x2 = Serial.read();
+                z2 = Serial.read();
+            }
+
+            // ---------------- Immediate Commands ----------------
+
+            if (cmd == HOME && !btmLimHit)
+            {
+                homeMotorsZ();
+                homeMotorsX();
+            }
+
+            else if (cmd == SERVO)
+            {
+                pingServo();
+            }
+
+            // where is the entrance position, is it below or above the entrance
+            else if (cmd == ENTRANCE)
+            {
+                moveTo(entrancePos);
+            }
+
+            else if (cmd == CANCEL)
+            {
+                disableMotorsZ();
+                disableMotorsX();
+            }
+
+            // ---------------- OFFSET ----------------
+
+            else if (cmd == OFFSET)
+            {
+                if (x_offset >= 0 && x_offset <= 5)
+                {
+                    X_OFFSET = x_offset / 10.0;
+                }
+                return;
+            }
+
+            // ---------------- Positional Commands ----------------
+
+            else if (cmd == GOTO || cmd == PICKUP || cmd == DROPOFF || cmd == RETURN || cmd == DISPENSE || cmd == REMOVE)
+            {
+                Position shelf_pos = posTranslation(x, z);
+                // above shelf doesnt work because x and z are indices not a distance
+                Position above_shelf = { shelf_pos.xPos, shelf_pos.zPos + PICKUP_DIST };
+                // Validate indices BEFORE computing positions
+                if (x < 0 || x > RIGHT_SHELF_IDX || z < 0 || z > TOP_SHELF_IDX)
+                {
+                  return;
+                }
+                else if (cmd == GOTO)
+                {
+                  if (x == 0 && z == 0)
+                  {
+                    moveTo(entrancePos);
+                  }
+                  else
+                  {
+                    moveTo(shelf_pos);
+                  }
+                }
+                else if (cmd == PICKUP)
+                {
+                  moveTo(shelf_pos);
+                  pingServo();
+                  waitForServo();
+                  moveTo(above_shelf);
+                  pingServo();
+                  waitForServo();
+                }
+                else if (cmd == DROPOFF)
+                {
+                  moveTo(above_shelf);
+                  pingServo();
+                  waitForServo();
+                  moveTo(shelf_pos);
+                  pingServo();
+                  waitForServo();
+                }
+                else if (cmd == RETURN)
+                {
+                  // ping other arduino to be ready for a cassette
+                  // move to entrance to get cassette
+                  // ping RPi that ARDUINO_DONE
+                  moveTo(above_shelf);
+                  pingServo();
+                  waitForServo();
+                  moveTo(shelf_pos);
+                  pingServo();
+                  waitForServo();
+                  // ping RPI that arduino DONE 
+                }
+                else if (cmd == DISPENSE || cmd == REMOVE)
+                {
+                  // ping other arduino to be ready for a cassette
+                  moveTo(shelf_pos);
+                  pingServo();
+                  waitForServo();
+                  moveTo(above_shelf);
+                  pingServo();
+                  waitForServo();
+                  // do the move to drop off cassette at entrance
+                  // listen to other servo for IR being low
+                  // ping RPi that ARDUINO_DONE
+                }
+
+            }
+
+            // ---------------- SWITCH ----------------
+
+            else if (cmd == SWITCH)
+            {
+                if (x1 < 0 || z1 < 0 || x2 < 0 || z2 < 0)
+                    return;
+
+                // Validate ranges if needed
+
+                // perform switching logic here
+                return;
+            }
+        }
     }
-
-    
   }
 }
 
@@ -356,6 +469,20 @@ void moveTo(Position posToGoTo)
   rightZStepper.moveToDistance(posToGoTo.zPos);
   xStepper.moveToDistance(posToGoTo.xPos);
 
+  if(posToGoTo.xPos == entrancePos.xPos && posToGoTo.zPos == entrancePos.zPos)
+  {
+    while( xStepper.distanceToGo() != 0 && !topLimLatched && !btmLimLatched && !leftLimLatched && !rightLimLatched)
+    {
+      xStepper.run();
+    }
+  // ignore the bottom lim being latched
+    while (( leftZStepper.distanceToGo() != 0 || rightZStepper.distanceToGo() != 0) && !topLimLatched && !leftLimLatched && !rightLimLatched) 
+    {
+      leftZStepper.run();
+      rightZStepper.run();
+    }
+  }
+  else {
   // check if not at position yet, and also check if any limit has latched at every step
   while (( leftZStepper.distanceToGo() != 0 || rightZStepper.distanceToGo() != 0 || xStepper.distanceToGo() != 0) && !topLimLatched && !btmLimLatched && !leftLimLatched && !rightLimLatched) 
   {
@@ -363,8 +490,8 @@ void moveTo(Position posToGoTo)
     rightZStepper.run();
     xStepper.run();
   }
+  }
 
-  Serial.println("Motors killed");
   disableMotorsZ();
   disableMotorsX();
 }
@@ -373,7 +500,6 @@ void pingServo()
 {
   Wire.beginTransmission(SLAVE_ADDR);
   // ping it to move the servo
-  Serial.println("Servo sent");
   Serial.println(MOVE_SERVO);
   Wire.write(MOVE_SERVO);  // same as MOVE_SERVO
   Wire.endTransmission();
@@ -384,7 +510,6 @@ void waitForServo()
 {
   while (true)
   {
-    Serial.println(" Waiting for servo");
     Wire.requestFrom(SLAVE_ADDR, 1);
     if (Wire.available())
     {
@@ -406,7 +531,6 @@ void homeMotorsZ()
   enableMotorsZ();
 
   // move motors until it hits the limit switch
-  Serial.println(" Homing Motors ");
   leftZStepper.moveRelative(-1000);
   rightZStepper.moveRelative(-1000);
 
@@ -417,7 +541,6 @@ void homeMotorsZ()
   }
 
   // kills the two motors
-  Serial.println("Z motors killed");
   disableMotorsZ();
 
   // motor doesnt actually move just resets the planner state
@@ -426,14 +549,11 @@ void homeMotorsZ()
   rightZStepper.stop();
   delay(50);
 
-  Serial.println(" Zero position set");
   leftZStepper.setCurrentPosition(0);
   rightZStepper.setCurrentPosition(0);
 
-  Serial.println(" Backing off from limit switch");
   delay(500);
 
-  Serial.println("Motor enabled");
   enableMotorsZ();
 
   // sometimes it backs off and sometimes it doesnt
@@ -450,7 +570,6 @@ void homeMotorsZ()
   btmLimLatched = false;
 
   // turn motors back off
-  Serial.println("Motor killed");
   disableMotorsZ();
 
 }
@@ -462,7 +581,6 @@ void homeMotorsX()
   enableMotorsX();
 
   // move motors until it hits the limit switch
-  Serial.println(" Homing X Motor ");
   xStepper.moveRelative(-1000);
 
   while (!leftLimLatched) 
@@ -471,7 +589,6 @@ void homeMotorsX()
   }
 
   // kills the two motors
-  Serial.println("x motor killed");
   disableMotorsX();
 
   // motor doesnt actually move just resets the planner state
@@ -479,13 +596,10 @@ void homeMotorsX()
   xStepper.stop();
   delay(50);
 
-  Serial.println(" Zero position set");
   xStepper.setCurrentPosition(0);
 
-  Serial.println(" Backing off from limit switch");
   delay(500);
 
-  Serial.println("X Motor enabled");
   enableMotorsX();
 
   // sometimes it backs off and sometimes it doesnt
@@ -501,7 +615,6 @@ void homeMotorsX()
   leftLimLatched = false;
 
   // turn motors back off
-  Serial.println("X Motor killed");
   disableMotorsX();
   
 }
@@ -554,8 +667,8 @@ void killMotors()
 Position posTranslation(int xIdx, int zIdx)
 {
   Position shelf;
-  shelf.xPos = X_OFFSET + xIdx * X_SHELF_DIST;
-  shelf.zPos = Z_OFFSET + zIdx * Z_SHELF_DIST;
+  shelf.xPos = X_OFFSET + (xIdx-1) * X_SHELF_DIST;
+  shelf.zPos = Z_OFFSET + (zIdx) * Z_SHELF_DIST;
   return shelf;
 }
 
