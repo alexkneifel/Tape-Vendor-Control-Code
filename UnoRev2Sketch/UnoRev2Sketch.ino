@@ -32,8 +32,8 @@ const int SERVO_SIG = 9;
 const int I2C_INDICATOR = A1;
 
 // Infrared Sensors
-const int IR_SENSOR_FRONT = A2;
-const int IR_SENSOR_BACK = A3;
+const int IR_SENSOR_FRONT = A3;
+const int IR_SENSOR_BACK = A2;
 
 // I2C Address of Slave Arduino
 const int SLAVE_ADDR = 0x08;
@@ -105,16 +105,20 @@ void loop()
   frontside = digitalRead(IR_SENSOR_FRONT);
   backside = digitalRead(IR_SENSOR_BACK);
 
-  //Serial.println(frontside);
-  //Serial.println(backside);
+  // 0 means casette is blocking
+  // Serial.print("Frontside: ");
+  // Serial.println(frontside);
+  // Serial.print("Backside: ");
+  // Serial.println(backside);
 
-    // motor1.setSpeed(255);
-    // motor4.setSpeed(255);
-    // motor1.run(BACKWARD);
-    // motor4.run(FORWARD);
 
- // since .write() is non-blocking, need to flip the bit after a set time that the servo is moving
- // because servos dont output their actual position
+  //   motor1.setSpeed(255);
+  //   motor4.setSpeed(255);
+  //   motor1.run(BACKWARD);
+  //   motor4.run(FORWARD);
+
+//  since .write() is non-blocking, need to flip the bit after a set time that the servo is moving
+//  because servos dont output their actual position
    if(move_servo_requested)
   {
     Serial.println(" Move Servo ");

@@ -25,7 +25,9 @@
 const uint8_t SERVO_DONE  = 1 << 0;  // 0b00000001
 
 // I2C master bytes
-const uint8_t MOVE_SERVO = 1 << 0; 
+const uint8_t MOVE_SERVO = 1 << 0;
+const uint8_t CASS_IN = 1 << 1;
+const uint8_t CASS_OUT = 1 << 2;
 const int SLAVE_ADDR = 0x08;
 bool servo_moving = false;
 
@@ -128,7 +130,7 @@ void disableMotorsZ();
 void enableMotorsX();
 void disableMotorsX();
 void moveTo(Position posToGoTo);
-void pingServo();
+void pingServo(uint8_t msg);
 void waitForServo();
 
 
@@ -496,7 +498,7 @@ void moveTo(Position posToGoTo)
   disableMotorsX();
 }
 
-void pingServo()
+void pingServo(uint8_t msg)
 {
   Wire.beginTransmission(SLAVE_ADDR);
   // ping it to move the servo
